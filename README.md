@@ -1,0 +1,1 @@
+Put course songs in songs/ then run database build once. Deploy app.py on Streamlit Community Cloud
