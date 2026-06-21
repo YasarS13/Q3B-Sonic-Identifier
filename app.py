@@ -13,8 +13,10 @@ st.title("Q3B Sonic Signature")
 import os
 
 if not os.path.exists("database/fingerprints.pkl"):
-    st.info("Fingerprint database not found. Building once...")
-    build_database()
+    st.error(
+        "Fingerprint database missing in deployment."
+    )
+    st.stop()
 
 matcher = SongMatcher()
 
