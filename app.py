@@ -10,8 +10,6 @@ st.set_page_config(page_title="Sonic Signature Identifier")
 st.title("Q3B Sonic Signature")
 
 
-import os
-
 import zipfile
 import os
 
@@ -27,6 +25,7 @@ if not os.path.exists(pkl_path):
         st.stop()
 
 matcher = SongMatcher()
+
 mode=st.radio("Mode",["Single Clip","Batch"])
 
 if mode=="Single Clip":
