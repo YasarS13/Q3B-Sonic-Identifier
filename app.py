@@ -12,14 +12,21 @@ st.title("Q3B Sonic Signature")
 
 import os
 
-if not os.path.exists("database/fingerprints.pkl"):
-    st.error(
-        "Fingerprint database missing in deployment."
-    )
-    st.stop()
+import zipfile
+import os
+
+zip_path = "database/fingerprints.zip"
+pkl_path = "database/fingerprints.pkl"
+
+if not os.path.exists(pkl_path):
+    if os.path.exists(zip_path):
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall("database")
+    else:
+        st.error("Fingerprint database missing.")
+        st.stop()
 
 matcher = SongMatcher()
-
 mode=st.radio("Mode",["Single Clip","Batch"])
 
 if mode=="Single Clip":
