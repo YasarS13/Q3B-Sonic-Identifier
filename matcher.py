@@ -1,113 +1,75 @@
-"""
-matcher.py
+from collections import defaultdict
+import sqlite3
+from fingerprint_b import AudioSignalProcessor
+from database import DB_FILE_PATH, RelationalStorageEngine
 
-Audio fingerprint matching engine.
+class SubstringAudioMatcher:
+    def __init__(self, db_path=DB_FILE_PATH):
+        self.storage = RelationalStorageEngine(db_path)
+        self.processor = AudioSignalProcessor()
+        # REMOVE self.track_map from here
 
-Loads the fingerprint database, fingerprints a query clip,
-matches hashes, computes offset histograms and predicts
-the most likely song.
-"""
+    def execute_identification(self, query_file_path):
+        """Matches a sample file against the indexed relational signatures."""
+        # 1. Fetch data safely dynamically
+        track_map = self.storage.fetch_track_mapping() 
+        
+        audio, sr = self.processor.ingest_track(query_file_path)
+        spec = self.processor.extract_density_features(audio)
+        peaks = self.processor.isolate_salient_points(spec)
+        query_fingerprints = self.processor.encode_triplet_hashes(peaks)
 
-import pickle
-from collections import Counter, defaultdict
+        # 2. Safety guard check
+        if not query_fingerprints or not track_map:
+            return self._build_empty_response(spec, peaks)
 
-from fingerprint import fingerprint_song
+        # Structure: structural_offsets[track_id][time_difference_delta] -> match_counts
+        structural_offsets = defaultdict(lambda: defaultdict(int))
+        total_query_hashes = len(query_fingerprints)
 
+        conn = sqlite3.connect(self.storage.db_path)
+        cursor = conn.cursor()
 
-class SongMatcher:
-    def __init__(self, database_path="database/fingerprints.pkl"):
-        with open(database_path, "rb") as f:
-            self.database = pickle.load(f)
+        for q_fingerprint in query_fingerprints:
+            q_hash = q_fingerprint["hash_id"]
+            q_time = q_fingerprint["anchor_time"]
 
-        self.hash_map = self.database["hash_map"]
+            cursor.execute("SELECT track_id, anchor_offset FROM signature_indices WHERE signature_hash = ?", (q_hash,))
+            matches = cursor.fetchall()
 
-    def match(self, query_file):
-        """
-        Match a query audio clip.
+            for track_id, db_time in matches:
+                offset_delta = db_time - q_time
+                structural_offsets[track_id][offset_delta] += 1
 
-        Returns
-        -------
-        dict
-        """
+        conn.close()
 
-        result = fingerprint_song(query_file)
+        # 3. Explicitly initialize tracking states
+        best_track_id = None
+        best_score = 0
+        target_track_histogram = {}
 
-        query_hashes = result["hashes"]
+        # Locate the track with the single highest peak alignment bin
+        for track_id, offsets_dict in structural_offsets.items():
+            for offset, score in offsets_dict.items():
+                if score > best_score:
+                    best_score = score
+                    best_track_id = track_id
+                    target_track_histogram = offsets_dict
 
-        offset_votes = defaultdict(Counter)
+        # 4. Determine matching output metrics
+        if best_track_id is not None and best_track_id in track_map:
+            prediction = track_map[best_track_id]
+            confidence = round((best_score / total_query_hashes) * 100, 2)
+        else:
+            prediction = "No Song Match"
+            confidence = 0.0
 
-        total_matches = 0
-
-        for hash_key, query_time in query_hashes:
-
-            if hash_key not in self.hash_map:
-                continue
-
-            matches = self.hash_map[hash_key]
-
-            total_matches += len(matches)
-
-            for song_name, db_time in matches:
-
-                offset = db_time - query_time
-
-                offset_votes[song_name][offset] += 1
-
-        if len(offset_votes) == 0:
-
-            return {
-                "prediction": "No Match",
-                "confidence": 0,
-                "offset_histogram": {},
-                "spectrogram": result["spectrogram"],
-                "peaks": result["peaks"]
-            }
-
-        best_song = None
-        best_offset = None
-        best_score = -1
-
-        histogram = {}
-
-        for song, counter in offset_votes.items():
-
-            offset, votes = counter.most_common(1)[0]
-
-            histogram[song] = counter
-
-            if votes > best_score:
-
-                best_score = votes
-                best_song = song
-                best_offset = offset
-
-        confidence = 0
-
-        if total_matches > 0:
-            confidence = round(
-                100 * best_score / total_matches,
-                2
-            )
-
+        # 5. Return the payload response (Fixes the TypeError)
         return {
-            "prediction": best_song,
-            "confidence": confidence,
-            "offset": best_offset,
+            "prediction": prediction,
+            "confidence": min(confidence, 100.0),
             "votes": best_score,
-            "offset_histogram": histogram,
-            "spectrogram": result["spectrogram"],
-            "peaks": result["peaks"]
+            "spectrogram": spec,
+            "peaks": peaks,
+            "histogram_data": dict(target_track_histogram)
         }
-
-
-if __name__ == "__main__":
-
-    matcher = SongMatcher()
-
-    query = input("Query audio path: ")
-
-    result = matcher.match(query)
-
-    print("\nPrediction :", result["prediction"])
-    print("Confidence:", result["confidence"], "%")
-    print("Votes:", result["votes"])

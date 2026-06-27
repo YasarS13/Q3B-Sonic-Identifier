@@ -1,92 +1,62 @@
-"""
-fingerprint.py
-
-Audio Fingerprinting Module for EE200 Q3B
-
-This module:
-1. Loads audio
-2. Computes an STFT spectrogram
-3. Detects prominent spectral peaks
-4. Generates constellation-map hashes
-"""
-
-import librosa
+import hashlib
 import numpy as np
+import librosa
 from scipy.ndimage import maximum_filter
 
+class AudioSignalProcessor:
+    def __init__(self, sample_rate=9600):
+        self.sample_rate = sample_rate
 
-def load_audio(file_path, sr=22050):
-    """Load an audio file as mono."""
-    audio, sample_rate = librosa.load(file_path, sr=sr, mono=True)
-    return audio, sample_rate
+    def ingest_track(self, file_path):
+        audio, sr = librosa.load(file_path, sr=self.sample_rate, mono=True)
+        return audio, sr
 
+    def extract_density_features(self, audio, n_fft=4096, hop_length=512):
+        stft_matrix = librosa.stft(audio, n_fft=n_fft, hop_length=hop_length, window="hann")
+        magnitude = np.abs(stft_matrix)
+        db_spectrogram = librosa.amplitude_to_db(magnitude, ref=np.max)
+        return db_spectrogram.astype(np.float32)
 
-def compute_spectrogram(audio, n_fft=4096, hop_length=512, window="hann"):
-    """Return magnitude spectrogram in dB."""
-    stft = librosa.stft(
-        audio,
-        n_fft=n_fft,
-        hop_length=hop_length,
-        window=window
-    )
-    magnitude = np.abs(stft)
-    return librosa.amplitude_to_db(magnitude, ref=np.max)
+    def isolate_salient_points(self, spectrogram, size=20, threshold=-65):
+        local_maxima = maximum_filter(spectrogram, size=size)
+        matching_mask = (spectrogram == local_maxima) & (spectrogram > threshold)
+        
+        freq_coords, time_coords = np.where(matching_mask)
+        
+        peaks = []
+        for f, t in zip(freq_coords, time_coords):
+            peaks.append({"frequency": int(f), "time_frame": int(t)})
+        
+        peaks.sort(key=lambda x: x["time_frame"])
+        return peaks
 
+    def encode_triplet_hashes(self, peaks, stride=1):
+        fingerprints = []
+        num_peaks = len(peaks)
+        
+        if num_peaks < 3:
+            print("[DEBUG] Not enough peaks to construct a single triplet.")
+            return fingerprints
 
-def detect_peaks(spectrogram, neighborhood_size=20, threshold_db=-45):
-    """Detect strong local maxima."""
-    local_max = maximum_filter(spectrogram, size=neighborhood_size)
-    mask = (spectrogram == local_max) & (spectrogram > threshold_db)
-
-    freq_bins, time_bins = np.where(mask)
-    return list(zip(freq_bins, time_bins))
-
-
-def generate_hashes(
-    peaks,
-    fan_value=10,
-    min_time_delta=1,
-    max_time_delta=200
-):
-    """Generate fingerprint hashes."""
-    hashes = []
-
-    peaks = sorted(peaks, key=lambda p: p[1])
-
-    for i in range(len(peaks)):
-        f1, t1 = peaks[i]
-
-        for j in range(1, fan_value + 1):
-            if i + j >= len(peaks):
-                break
-
-            f2, t2 = peaks[i + j]
-            dt = t2 - t1
-
-            if dt < min_time_delta or dt > max_time_delta:
-                continue
-
-            hashes.append(((int(f1), int(f2), int(dt)), int(t1)))
-
-    return hashes
-
-
-def fingerprint_song(file_path):
-    """
-    Complete fingerprint pipeline.
-
-    Returns:
-        dict containing spectrogram, peaks, hashes and sample rate.
-    """
-    audio, sr = load_audio(file_path)
-
-    spectrogram = compute_spectrogram(audio)
-    peaks = detect_peaks(spectrogram)
-    hashes = generate_hashes(peaks)
-
-    return {
-        "spectrogram": spectrogram,
-        "peaks": peaks,
-        "hashes": hashes,
-        "sample_rate": sr
-    }
+        for i in range(0, num_peaks - 2, stride):
+            p1 = peaks[i]
+            p2 = peaks[i + 1]
+            p3 = peaks[i + 2]
+            
+            t_delta_1 = p2["time_frame"] - p1["time_frame"]
+            t_delta_2 = p3["time_frame"] - p2["time_frame"]
+            
+            # WIDENED WINDOW FOR SHORTER CLIPS: Changed lower bound from 1 to 0 
+            # to accommodate tightly packed frames
+            if (0 <= t_delta_1 <= 200) and (0 <= t_delta_2 <= 200):
+                token_string = f"{p1['frequency']}|{p2['frequency']}|{p3['frequency']}:{t_delta_1}:{t_delta_2}"
+                hex_digest = hashlib.md5(token_string.encode('utf-8')).hexdigest()
+                hash_id = int(hex_digest[:8], 16)
+                
+                fingerprints.append({
+                    "hash_id": hash_id,
+                    "anchor_time": p1["time_frame"]
+                })
+                
+        print(f"[DEBUG] Successfully encoded {len(fingerprints)} triplet hashes.")
+        return fingerprints
