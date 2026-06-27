@@ -21,7 +21,12 @@ class SubstringAudioMatcher:
 
         # 2. Safety guard check
         if not query_fingerprints or not track_map:
-            return self._build_empty_response(spec, peaks)
+            return {
+    "prediction": "No match found",
+    "spectrogram": spec,
+    "peaks": peaks,
+    "confidence": 0
+}
 
         # Structure: structural_offsets[track_id][time_difference_delta] -> match_counts
         structural_offsets = defaultdict(lambda: defaultdict(int))
