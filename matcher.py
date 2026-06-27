@@ -1,6 +1,6 @@
 from collections import defaultdict
 import sqlite3
-from fingerprint_b import AudioSignalProcessor
+from fingerprint import AudioSignalProcessor
 from database import DB_FILE_PATH, RelationalStorageEngine
 
 class SubstringAudioMatcher:
